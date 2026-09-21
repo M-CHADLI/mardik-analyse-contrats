@@ -13,6 +13,7 @@ promotion. C'est ici, et nulle part ailleurs, que l'observabilite pilote la chai
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from pathlib import Path
@@ -23,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 
 from mardik.api import canary, schemas
 from mardik.boucles import enrichissement, promotion, rollback
-from mardik.config import CLAUSES_ATTENDUES, Seuils, config, version_livree
+from mardik.config import CLAUSES_ATTENDUES, GOLDEN, Seuils, config, version_livree
 from mardik.modele import v1, v2
 from mardik.modele.llm import ErreurMoteur
 from mardik.observabilite import journal, signaux, telemetrie
@@ -219,6 +220,17 @@ def api_signaux(fenetre: int = 200):
         },
         "version_livree": version_livree(),
     }
+
+
+@app.get("/api/exemple", summary="Contrat de demonstration")
+def api_exemple():
+    """Un contrat long tire du jeu d'evaluation, pour alimenter le client sans copier-coller."""
+    if GOLDEN.exists():
+        with GOLDEN.open(encoding="utf-8") as fichier:
+            cas = [json.loads(ligne) for ligne in fichier if ligne.strip()]
+        long = max(cas, key=lambda c: len(c["contrat"]))
+        return {"contrat": long["contrat"], "id": long["id"]}
+    return {"contrat": "", "id": None}
 
 
 @app.get("/api/journal", summary="Journal de pilotage")

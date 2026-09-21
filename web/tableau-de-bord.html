@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mardik — Tableau de bord</title>
+<link rel="stylesheet" href="/static/commun.css">
+<style>
+  .histogramme { display: flex; align-items: flex-end; gap: 4px; height: 110px; margin-top: 8px; }
+  .histogramme .barre { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; }
+  .histogramme .remplissage { background: var(--accent); border-radius: 3px 3px 0 0; min-height: 2px; }
+  .histogramme .remplissage.sous-seuil { background: var(--danger); }
+  .histogramme .legende { font-size: 9.5px; color: var(--attenue); text-align: center; margin-top: 4px; }
+  .repartition { display: flex; height: 26px; border-radius: 6px; overflow: hidden; border: 1px solid var(--bord); }
+  .repartition div { display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: #fff; }
+  .repartition .part-v1 { background: #6b6b73; }
+  .repartition .part-v2 { background: var(--accent); }
+</style>
+</head>
+<body>
+<div class="enveloppe">
+
+  <header class="principal">
+    <div>
+      <h1>Pilotage de la production</h1>
+      <p id="entete-version">Chargement…</p>
+    </div>
+    <nav>
+      <a href="/">Client</a>
+      <a href="/docs">API</a>
+    </nav>
+  </header>
+
+  <!-- Signaux 1, 2, 3 : latence, coût, taux d'erreur -->
+  <div class="grille" id="indicateurs"></div>
+
+  <div class="carte">
+    <h2>Répartition du trafic et pilotage du canary</h2>
+    <div class="repartition" id="repartition"></div>
+    <div class="actions" style="margin-top:14px">
+      <span id="etat-canary" class="vide"></span>
+      <span style="flex:1"></span>
+      <input id="poids" type="number" min="0" max="100" value="10" style="width:90px">
+      <button id="appliquer" class="secondaire">Appliquer la répartition</button>
+      <button id="promouvoir" class="secondaire">Évaluer la promotion</button>
+      <button id="rollback" class="danger">Rollback immédiat</button>
+    </div>
+  </div>
+
+  <!-- Signal 4 : distribution du score de confiance -->
+  <div class="carte">
+    <h2>Distribution du score de confiance</h2>
+    <div class="histogramme" id="histogramme"></div>
+    <p class="vide" id="note-histogramme"></p>
+  </div>
+
+  <div class="carte">
+    <h2>Cas à faible confiance en attente de relecture</h2>
+    <p class="vide" style="margin-top:-6px">
+      Un score bas signifie que le modèle doute, pas qu'il s'est trompé. Un cas n'entre
+      dans le jeu d'évaluation qu'après relecture, pour ne pas y graver une erreur.
+    </p>
+    <div id="validation"></div>
+  </div>
+
+  <div class="carte">
+    <h2>Journal de pilotage</h2>
+    <div id="journal"></div>
+  </div>
+
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const pourcent = (v) => (v * 100).toFixed(1) + ' %';
+
+let clausesPossibles = [];
+
+function indicateur(etiquette, valeur, note, niveau) {
+  return `<div class="indicateur">
+    <div class="etiquette">${etiquette}</div>
+    <div class="valeur">${valeur}</div>
+    <div class="note">${niveau ? `<span class="puce ${niveau}">` : ''}${note}${niveau ? '</span>' : ''}</div>
+  </div>`;
+}
+
+async function rafraichir() {
+  const [signaux, canary, journal, validation] = await Promise.all([
+    fetch('/api/signaux').then(r => r.json()),
+    fetch('/api/canary').then(r => r.json()),
+    fetch('/api/journal?limite=25').then(r => r.json()),
+    fetch('/api/validation').then(r => r.json()),
+  ]);
+
+  clausesPossibles = validation.clauses_possibles;
+  const g = signaux.global, seuils = signaux.seuils;
+  const latenceS = g.latence_p95_ms / 1000;
+
+  $('entete-version').innerHTML =
+    `Version livrée <code>${signaux.version_livree}</code> · ${g.requetes} requête(s) observée(s)`;
+
+  $('indicateurs').innerHTML =
+    indicateur('Latence p95', `${latenceS.toFixed(2)} s`,
+      `seuil de rollback ${seuils.rollback_latence_p95_s} s`,
+      latenceS > seuils.rollback_latence_p95_s ? 'echec' : 'ok')
+    + indicateur('Coût cumulé', `${g.cout_total_eur.toFixed(4)} €`,
+      `${g.requetes} analyse(s)`)
+    + indicateur('Taux d\'erreur', pourcent(g.taux_erreur),
+      `seuil ${pourcent(seuils.rollback_taux_erreur)}`,
+      g.taux_erreur > seuils.rollback_taux_erreur ? 'echec' : 'ok')
+    + indicateur('Analyses peu fiables', pourcent(g.part_faible_confiance),
+      `seuil ${pourcent(seuils.rollback_part_faible_confiance)}`,
+      g.part_faible_confiance > seuils.rollback_part_faible_confiance ? 'echec' : 'ok');
+
+  // Signal 5 — part de trafic v1/v2 réellement observée, pas seulement configurée.
+  const part = signaux.part_trafic;
+  $('repartition').innerHTML = part.total
+    ? `<div class="part-v1" style="width:${part.v1 * 100}%">${part.v1 > 0.08 ? 'v1 ' + pourcent(part.v1) : ''}</div>
+       <div class="part-v2" style="width:${part.v2 * 100}%">${part.v2 > 0.08 ? 'v2 ' + pourcent(part.v2) : ''}</div>`
+    : '<div class="part-v1" style="width:100%">aucun trafic observé</div>';
+
+  $('etat-canary').innerHTML =
+    `Répartition configurée : <strong>${canary.poids_v2} %</strong> vers la v2`
+    + (canary.palier_suivant !== null ? ` · palier suivant ${canary.palier_suivant} %` : ' · palier maximal')
+    + (canary.gele ? ` <span class="puce echec">promotion gelée — ${canary.motif_gel ?? ''}</span>` : '');
+
+  const total = signaux.distribution_scores.reduce((s, p) => s + p.effectif, 0);
+  const maximum = Math.max(1, ...signaux.distribution_scores.map(p => p.effectif));
+  $('histogramme').innerHTML = signaux.distribution_scores.map(p => {
+    const borneBasse = parseFloat(p.palier.split('-')[0]);
+    return `<div class="barre">
+      <div class="remplissage ${borneBasse < seuils.faible_confiance ? 'sous-seuil' : ''}"
+           style="height:${(p.effectif / maximum) * 100}%" title="${p.effectif} analyse(s)"></div>
+      <div class="legende">${p.palier}</div>
+    </div>`;
+  }).join('');
+  $('note-histogramme').textContent = total
+    ? `${total} analyse(s) notée(s). En rouge : sous le seuil de fiabilité de ${seuils.faible_confiance}.`
+    : 'Aucune analyse notée pour le moment.';
+
+  $('validation').innerHTML = validation.cas.length ? `
+    <table>
+      <thead><tr><th>Cas</th><th>Score</th><th>Taille</th><th>Début du contrat</th><th>Clauses attendues</th></tr></thead>
+      <tbody>${validation.cas.map(cas => `
+        <tr>
+          <td><code>${cas.id}</code></td>
+          <td class="num"><span class="puce echec">${cas.score_observe.toFixed(2)}</span></td>
+          <td class="num">${cas.taille.toLocaleString('fr-FR')}</td>
+          <td class="vide">${cas.contrat.slice(0, 110).replace(/</g, '&lt;')}…</td>
+          <td>
+            <select multiple size="3" id="clauses-${cas.id}" style="min-width:150px">
+              ${clausesPossibles.map(c => `<option value="${c}">${c}</option>`).join('')}
+            </select>
+            <button class="secondaire" style="margin-top:6px" onclick="valider('${cas.id}')">
+              Verser au jeu d'évaluation
+            </button>
+          </td>
+        </tr>`).join('')}</tbody>
+    </table>` : '<p class="vide">Aucun cas en attente.</p>';
+
+  $('journal').innerHTML = journal.entrees.length ? `
+    <table>
+      <thead><tr><th>Horodatage</th><th>Événement</th><th>Signal déclencheur</th><th>Observé / seuil</th><th>Auteur</th></tr></thead>
+      <tbody>${journal.entrees.map(e => `
+        <tr>
+          <td class="vide">${new Date(e.horodatage).toLocaleString('fr-FR')}</td>
+          <td><span class="puce ${e.evenement === 'rollback' ? 'echec' : e.evenement === 'promotion' ? 'ok' : ''}">${e.evenement}</span></td>
+          <td><code>${e.signal_declencheur}</code></td>
+          <td class="num">${e.valeur_observee ?? '—'}${e.seuil !== null && e.seuil !== undefined ? ` / ${e.seuil}` : ''}</td>
+          <td>${e.auteur}</td>
+        </tr>`).join('')}</tbody>
+    </table>` : '<p class="vide">Aucune décision enregistrée.</p>';
+}
+
+async function valider(casId) {
+  const selection = [...$(`clauses-${casId}`).selectedOptions].map(o => o.value);
+  await fetch(`/api/validation/${casId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clauses_attendues: selection, auteur: 'juriste' }),
+  });
+  rafraichir();
+}
+
+async function appeler(chemin, corps) {
+  await fetch(chemin, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(corps),
+  });
+  rafraichir();
+}
+
+$('rollback').addEventListener('click', () =>
+  appeler('/api/canary/rollback', { auteur: 'operateur', motif: 'rollback manuel depuis le tableau de bord' }));
+$('promouvoir').addEventListener('click', () =>
+  appeler('/api/canary/promouvoir', { auteur: 'operateur' }));
+$('appliquer').addEventListener('click', () =>
+  appeler('/api/canary/poids', { poids: Number($('poids').value), auteur: 'operateur' }));
+
+rafraichir();
+setInterval(rafraichir, 4000);
+</script>
+</body>
+</html>

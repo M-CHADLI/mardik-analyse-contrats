@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mardik — Analyse de contrat</title>
+<link rel="stylesheet" href="/static/commun.css">
+</head>
+<body>
+<div class="enveloppe">
+
+  <header class="principal">
+    <div>
+      <h1>Analyse de contrat</h1>
+      <p>Dépôt d'un contrat commercial et extraction des clauses structurantes.</p>
+    </div>
+    <nav>
+      <a href="/tableau-de-bord">Tableau de bord</a>
+      <a href="/docs">API</a>
+    </nav>
+  </header>
+
+  <div class="carte">
+    <h2>Contrat à analyser</h2>
+    <textarea id="contrat" placeholder="Collez ici le texte du contrat…"></textarea>
+    <div class="actions" style="margin-top:12px">
+      <button id="analyser">Analyser</button>
+      <button id="exemple" class="secondaire">Charger un contrat d'exemple</button>
+      <span id="taille" class="vide"></span>
+    </div>
+  </div>
+
+  <div id="resultat"></div>
+
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function pourcent(valeur) { return (valeur * 100).toFixed(0) + ' %'; }
+
+function niveauScore(score, seuil) {
+  if (score >= seuil + 0.15) return 'ok';
+  if (score >= seuil) return 'attention';
+  return 'echec';
+}
+
+function afficherErreur(corps) {
+  $('resultat').innerHTML = `
+    <div class="carte">
+      <h2>Analyse impossible</h2>
+      <p><span class="puce echec">${corps.code ?? 'ERREUR'}</span></p>
+      <p>${corps.message ?? 'Le service n\'a pas pu traiter la demande.'}</p>
+      ${corps.detail ? `<p class="vide">${corps.detail}</p>` : ''}
+    </div>`;
+}
+
+function afficher(corps) {
+  const estV2 = corps.score_confiance !== undefined;
+  const clauses = Object.entries(corps.clauses ?? {});
+
+  // La v1 ne renvoie aucun score : c'est précisément le défaut que la v2 corrige.
+  const bandeauConfiance = estV2 ? `
+    <div class="grille" style="margin-bottom:16px">
+      <div class="indicateur">
+        <div class="etiquette">Indice de fiabilité</div>
+        <div class="valeur">${corps.score_confiance.toFixed(2)}</div>
+        <div class="note">
+          <span class="puce ${corps.fiable ? 'ok' : 'echec'}">
+            ${corps.fiable ? 'analyse fiable' : 'à revérifier'}
+          </span>
+        </div>
+      </div>
+      <div class="indicateur">
+        <div class="etiquette">Document analysé</div>
+        <div class="valeur">${pourcent(corps.couverture)}</div>
+        <div class="note">${corps.segments_analyses}/${corps.segments_total} segments</div>
+      </div>
+      <div class="indicateur">
+        <div class="etiquette">Clauses trouvées</div>
+        <div class="valeur">${pourcent(corps.completude)}</div>
+        <div class="note">${clauses.length} clause(s) extraite(s)</div>
+      </div>
+    </div>` : `
+    <div class="carte" style="border-color:var(--alerte)">
+      <p style="margin:0">
+        <span class="puce attention">aucun indice de fiabilité</span>
+        Cette réponse provient de la génération v1, qui n'évalue pas sa propre certitude
+        et n'analyse que le début du document.
+      </p>
+    </div>`;
+
+  const manquantes = (corps.clauses_manquantes ?? []);
+
+  $('resultat').innerHTML = `
+    ${bandeauConfiance}
+    <div class="carte">
+      <h2>
+        Clauses extraites
+        <span class="puce ${corps.version_modele}">${corps.version_modele}</span>
+        <span class="puce">version ${corps.version_livree}</span>
+      </h2>
+      ${clauses.length ? `
+        <table>
+          <thead><tr><th>Clause</th><th>Extrait repéré</th></tr></thead>
+          <tbody>
+            ${clauses.map(([nom, extrait]) => `
+              <tr><td><strong>${nom}</strong></td><td>${extrait.replace(/</g, '&lt;')}</td></tr>
+            `).join('')}
+          </tbody>
+        </table>` : '<p class="vide">Aucune clause identifiée dans ce document.</p>'}
+      ${manquantes.length ? `
+        <p class="vide" style="margin-top:12px">
+          Clauses attendues non trouvées : ${manquantes.map(c => `<code>${c}</code>`).join(', ')}
+        </p>` : ''}
+    </div>`;
+}
+
+$('contrat').addEventListener('input', () => {
+  const taille = $('contrat').value.length;
+  $('taille').textContent = taille ? `${taille.toLocaleString('fr-FR')} caractères` : '';
+});
+
+$('analyser').addEventListener('click', async () => {
+  const contrat = $('contrat').value;
+  $('analyser').disabled = true;
+  $('resultat').innerHTML = '<p class="vide">Analyse en cours…</p>';
+  try {
+    const reponse = await fetch('/analyser', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contrat }),
+    });
+    const corps = await reponse.json();
+    reponse.ok ? afficher(corps) : afficherErreur(corps);
+  } catch (erreur) {
+    afficherErreur({ code: 'RESEAU', message: String(erreur) });
+  } finally {
+    $('analyser').disabled = false;
+  }
+});
+
+$('exemple').addEventListener('click', async () => {
+  const reponse = await fetch('/api/exemple');
+  const corps = await reponse.json();
+  $('contrat').value = corps.contrat;
+  $('contrat').dispatchEvent(new Event('input'));
+});
+</script>
+</body>
+</html>
