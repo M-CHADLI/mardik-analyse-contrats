@@ -1,0 +1,26 @@
+# Environnement
+.env
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Artefacts d'exécution (générés en production, jamais commités)
+donnees/journal.jsonl
+donnees/signaux.jsonl
+donnees/file_validation.jsonl
+donnees/etat_canary.json
+
+# Rapports d'évaluation
+eval/rapports/
+
+# Divers
+.DS_Store
+Thumbs.db
+*.log
