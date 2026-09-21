@@ -25,7 +25,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+RACINE = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(RACINE / "src"))
+sys.path.insert(0, str(RACINE))
 
 from mardik.config import Seuils  # noqa: E402
 
