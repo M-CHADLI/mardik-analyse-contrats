@@ -1,0 +1,198 @@
+# Chaine LLMOps — gates bloquants, build, artefact etiquete, deploiement canary.
+#
+# L'enchainement `needs:` est ce qui implemente litteralement l'exigence du CTO : si le
+# job `gates` echoue, le build ne demarre jamais, donc aucune image n'est construite ni
+# publiee. Il n'existe aucun chemin permettant de livrer sans avoir franchi les gates.
+
+name: Chaine LLMOps
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      poids_canary:
+        description: "Part du trafic dirigee vers la v2 au deploiement (0-100)"
+        default: "10"
+
+concurrency:
+  group: llmops-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRE: ghcr.io
+  IMAGE: ${{ github.repository }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Gates bloquants — qualite du code, tests d'acceptance, evaluation du modele.
+  #    Le moteur factice est utilise ici : les gates doivent etre gratuits,
+  #    deterministes et executables sans aucun secret.
+  # ---------------------------------------------------------------------------
+  gates:
+    name: Gates bloquants
+    runs-on: ubuntu-latest
+    env:
+      MARDIK_FAKE_LLM: "1"
+      MARDIK_OTEL_ACTIF: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Installer les dependances
+        run: uv sync --frozen --all-groups
+
+      - name: Gate 1 — format et style
+        run: |
+          uv run ruff format --check .
+          uv run ruff check .
+
+      - name: Gate 2 — typage
+        run: uv run mypy src
+
+      - name: Gate 3 — tests d'acceptance
+        run: uv run pytest -q
+
+      - name: Gate 4 — evaluation du modele
+        # Rejoue le jeu d'evaluation, cas de production inclus (boucle d'enrichissement).
+        # Sortie non nulle si le score passe sous le seuil : la chaine s'arrete ici.
+        run: uv run python eval/evaluer.py --reference
+
+      - name: Publier le rapport d'evaluation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-evaluation
+          path: |
+            eval/rapports/
+            eval/historique.jsonl
+            eval/reference_gate.json
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------
+  # 2. Build et publication de l'artefact etiquete (code + modele + config).
+  # ---------------------------------------------------------------------------
+  artefact:
+    name: Artefact etiquete
+    needs: gates
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      version: ${{ steps.version.outputs.valeur }}
+      digest: ${{ steps.publication.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Calculer la version livree
+        id: version
+        # Une etiquette unique et rattachable au code exact qui l'a produite.
+        run: echo "valeur=${GITHUB_REF_NAME}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Construire l'image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: mardik:epreuve
+          build-args: MARDIK_VERSION=${{ steps.version.outputs.valeur }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Epreuve de demarrage du conteneur
+        # Un artefact qui ne demarre pas n'est pas livrable : on le verifie avant
+        # publication, pas apres deploiement.
+        run: |
+          docker run -d --name epreuve -p 8000:8000 -e MARDIK_FAKE_LLM=1 mardik:epreuve
+          for tentative in $(seq 1 20); do
+            if curl -fs http://localhost:8000/sante > /dev/null; then break; fi
+            sleep 3
+          done
+          curl -fs http://localhost:8000/sante | tee sante.json
+          grep -q "${{ steps.version.outputs.valeur }}" sante.json
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:8000/analyser \
+            -H 'Content-Type: application/json' -d '{"contrat":""}')" = "422"
+          docker rm -f epreuve
+
+      - name: Se connecter au registre
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRE }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Etiqueter
+        id: etiquettes
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRE }}/${{ env.IMAGE }}
+          tags: |
+            type=raw,value=${{ steps.version.outputs.valeur }}
+            type=sha,format=long
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Publier
+        id: publication
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.etiquettes.outputs.tags }}
+          labels: ${{ steps.etiquettes.outputs.labels }}
+          build-args: MARDIK_VERSION=${{ steps.version.outputs.valeur }}
+          cache-from: type=gha
+
+  # ---------------------------------------------------------------------------
+  # 3. Deploiement canary — la v2 ne prend qu'une part minoritaire du trafic ;
+  #    la suite de la montee est decidee par les metriques, pas par ce workflow.
+  # ---------------------------------------------------------------------------
+  deploiement:
+    name: Deploiement canary
+    needs: artefact
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Recapitulatif du deploiement
+        run: |
+          {
+            echo "### Version livree : \`${{ needs.artefact.outputs.version }}\`"
+            echo ""
+            echo "- Image : \`${{ env.REGISTRE }}/${{ env.IMAGE }}:${{ needs.artefact.outputs.version }}\`"
+            echo "- Empreinte : \`${{ needs.artefact.outputs.digest }}\`"
+            echo "- Part de trafic v2 initiale : ${{ github.event.inputs.poids_canary || '10' }} %"
+            echo ""
+            echo "La montee en trafic suivante (10 → 50 → 100 %) est decidee par la boucle"
+            echo "de promotion a partir des metriques observees, et un franchissement de"
+            echo "seuil declenche un rollback automatique."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Appliquer la repartition canary
+        # En l'absence d'hote distant configure, la repartition est portee par l'etat de
+        # l'application ; avec un hote, cette etape appelle POST /api/canary/poids.
+        env:
+          HOTE: ${{ secrets.MARDIK_HOTE }}
+        run: |
+          POIDS="${{ github.event.inputs.poids_canary || '10' }}"
+          if [ -z "$HOTE" ]; then
+            echo "Aucun hote distant configure (secret MARDIK_HOTE absent)."
+            echo "Deploiement local : MARDIK_CANARY_V2=$POIDS"
+            exit 0
+          fi
+          curl -fsS -X POST "$HOTE/api/canary/poids" \
+            -H 'Content-Type: application/json' \
+            -d "{\"poids\": $POIDS, \"auteur\": \"chaine-llmops\"}"

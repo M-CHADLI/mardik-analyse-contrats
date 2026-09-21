@@ -36,7 +36,9 @@ def _ajouter(chemin, enregistrement: dict) -> None:
         fichier.write(json.dumps(enregistrement, ensure_ascii=False) + "\n")
 
 
-def capturer(contrat: str, *, score: float, clauses_trouvees: list[str], requete_id: str) -> dict | None:
+def capturer(
+    contrat: str, *, score: float, clauses_trouvees: list[str], requete_id: str
+) -> dict | None:
     """Capture une analyse peu fiable. Sans effet si le score est au-dessus du seuil."""
     if score >= Seuils.FAIBLE_CONFIANCE:
         return None
@@ -66,9 +68,7 @@ def capturer(contrat: str, *, score: float, clauses_trouvees: list[str], requete
 def file_attente() -> list[dict]:
     """Cas captures en attente de relecture, sans le texte integral du contrat."""
     deja_verses = {cas["id"] for cas in _lire_lignes(GOLDEN) if cas.get("origine") == "production"}
-    rejetes = {
-        cas["id"] for cas in _lire_lignes(FILE_VALIDATION) if cas.get("statut") == "rejete"
-    }
+    rejetes = {cas["id"] for cas in _lire_lignes(FILE_VALIDATION) if cas.get("statut") == "rejete"}
 
     vus: set[str] = set()
     attente = []

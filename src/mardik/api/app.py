@@ -59,56 +59,37 @@ def _valider(contrat: str) -> JSONResponse | None:
     return None
 
 
-def _servir(version: str, requete: schemas.Requete):
-    requete_id = str(uuid.uuid4())[:12]
-    debut = time.perf_counter()
+def _repondre_v1(
+    resultat: v1.ResultatV1,
+    requete: schemas.Requete,
+    requete_id: str,
+    latence_ms: float,
+) -> schemas.ReponseV1:
+    signaux.enregistrer(
+        version_modele="v1",
+        latence_ms=latence_ms,
+        tokens=resultat.tokens,
+        requete_id=requete_id,
+    )
+    return schemas.ReponseV1(
+        clauses=resultat.clauses,
+        version_modele="v1",
+        version_livree=version_livree(),
+        reference=requete.reference,
+    )
 
-    with telemetrie.span(
-        "analyse_contrat",
-        **{
-            "mardik.version_modele": version,
-            "mardik.version_livree": version_livree(),
-            "mardik.taille_contrat": len(requete.contrat),
-            "mardik.requete_id": requete_id,
-        },
-    ):
-        try:
-            resultat = v2.analyser(requete.contrat) if version == "v2" else v1.analyser(requete.contrat)
-        except ErreurMoteur as erreur:
-            signaux.enregistrer(
-                version_modele=version,
-                latence_ms=(time.perf_counter() - debut) * 1000,
-                tokens=0,
-                requete_id=requete_id,
-                erreur=True,
-                code_erreur="MOTEUR_INDISPONIBLE",
-            )
-            if version == "v2":
-                rollback.evaluer()
-            return _erreur(
-                503,
-                "MOTEUR_INDISPONIBLE",
-                "Le moteur d'analyse n'a pas pu traiter la demande.",
-                detail=str(erreur),
-            )
 
-    latence_ms = (time.perf_counter() - debut) * 1000
-    commun = {
-        "clauses": resultat.clauses,
-        "version_modele": version,
-        "version_livree": version_livree(),
-        "reference": requete.reference,
-    }
+def _repondre_v2(
+    resultat: v2.ResultatV2,
+    requete: schemas.Requete,
+    requete_id: str,
+    latence_ms: float,
+) -> schemas.ReponseV2:
+    """Enregistre le signal, puis laisse les boucles decider de la suite.
 
-    if version == "v1":
-        signaux.enregistrer(
-            version_modele="v1",
-            latence_ms=latence_ms,
-            tokens=resultat.tokens,
-            requete_id=requete_id,
-        )
-        return schemas.ReponseV1(**commun)
-
+    L'ordre compte : le signal doit etre ecrit avant que les boucles ne relisent la
+    fenetre, sinon la requete courante serait absente de leur diagnostic.
+    """
     signaux.enregistrer(
         version_modele="v2",
         latence_ms=latence_ms,
@@ -123,11 +104,16 @@ def _servir(version: str, requete: schemas.Requete):
         clauses_trouvees=sorted(resultat.clauses),
         requete_id=requete_id,
     )
+    # Un rollback rend la promotion sans objet : on ne relance pas la montee en trafic
+    # dans le meme cycle que le retour arriere.
     if rollback.evaluer() is None:
         promotion.evaluer()
 
     return schemas.ReponseV2(
-        **commun,
+        clauses=resultat.clauses,
+        version_modele="v2",
+        version_livree=version_livree(),
+        reference=requete.reference,
         score_confiance=resultat.score_confiance,
         fiable=resultat.fiable,
         couverture=resultat.couverture,
@@ -136,6 +122,52 @@ def _servir(version: str, requete: schemas.Requete):
         segments_analyses=resultat.segments_analyses,
         segments_total=resultat.segments_total,
     )
+
+
+def _servir(
+    version: str, requete: schemas.Requete
+) -> schemas.ReponseV1 | schemas.ReponseV2 | JSONResponse:
+    requete_id = str(uuid.uuid4())[:12]
+    debut = time.perf_counter()
+
+    with telemetrie.span(
+        "analyse_contrat",
+        **{
+            "mardik.version_modele": version,
+            "mardik.version_livree": version_livree(),
+            "mardik.taille_contrat": len(requete.contrat),
+            "mardik.requete_id": requete_id,
+        },
+    ):
+        try:
+            if version == "v1":
+                brut_v1 = v1.analyser(requete.contrat)
+                latence_ms = (time.perf_counter() - debut) * 1000
+                return _repondre_v1(brut_v1, requete, requete_id, latence_ms)
+
+            brut_v2 = v2.analyser(requete.contrat)
+            latence_ms = (time.perf_counter() - debut) * 1000
+            return _repondre_v2(brut_v2, requete, requete_id, latence_ms)
+
+        except ErreurMoteur as erreur:
+            signaux.enregistrer(
+                version_modele=version,
+                latence_ms=(time.perf_counter() - debut) * 1000,
+                tokens=0,
+                requete_id=requete_id,
+                erreur=True,
+                code_erreur="MOTEUR_INDISPONIBLE",
+            )
+            # Une panne du moteur est elle aussi un signal : elle alimente le taux
+            # d'erreur qui peut declencher le rollback.
+            if version == "v2":
+                rollback.evaluer()
+            return _erreur(
+                503,
+                "MOTEUR_INDISPONIBLE",
+                "Le moteur d'analyse n'a pas pu traiter la demande.",
+                detail=str(erreur),
+            )
 
 
 @app.post("/analyser", summary="Analyse repartie par le canary")

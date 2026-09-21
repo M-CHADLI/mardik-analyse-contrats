@@ -80,9 +80,7 @@ def analyser(contrat: str) -> ResultatV2:
 
     couverture = min(1.0, caracteres_analyses / len(contrat)) if contrat else 0.0
     completude = len(clauses) / len(CLAUSES_ATTENDUES)
-    autoevaluation = (
-        sum(a.autoevaluation for a in analyses) / len(analyses) if analyses else 0.0
-    )
+    autoevaluation = sum(a.autoevaluation for a in analyses) / len(analyses) if analyses else 0.0
 
     score = (
         POIDS_COUVERTURE * couverture

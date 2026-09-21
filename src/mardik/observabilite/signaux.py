@@ -102,9 +102,7 @@ def agreger(lignes: list[dict]) -> dict:
         }
 
     latences = [ligne["latence_ms"] for ligne in lignes]
-    scores = [
-        ligne["score_confiance"] for ligne in lignes if ligne["score_confiance"] is not None
-    ]
+    scores = [ligne["score_confiance"] for ligne in lignes if ligne["score_confiance"] is not None]
     erreurs = sum(1 for ligne in lignes if ligne["erreur"])
     faibles = sum(1 for score in scores if score < Seuils.FAIBLE_CONFIANCE)
 
@@ -136,11 +134,7 @@ def part_trafic() -> dict:
 
 def distribution_scores(paliers: int = 10) -> list[dict]:
     """Histogramme du score de confiance — un des cinq signaux exiges."""
-    scores = [
-        ligne["score_confiance"]
-        for ligne in lire()
-        if ligne["score_confiance"] is not None
-    ]
+    scores = [ligne["score_confiance"] for ligne in lire() if ligne["score_confiance"] is not None]
     histogramme = [0] * paliers
     for score in scores:
         index = min(paliers - 1, int(score * paliers))

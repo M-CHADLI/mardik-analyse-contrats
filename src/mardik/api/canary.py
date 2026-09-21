@@ -52,6 +52,7 @@ def definir_poids(
     seuil: float | str | None = None,
     geler: bool = False,
     motif_gel: str | None = None,
+    **details: object,
 ) -> dict:
     """Modifie la repartition et trace systematiquement la decision.
 
@@ -78,6 +79,7 @@ def definir_poids(
         poids_v2_avant=precedent["poids_v2"],
         poids_v2_apres=poids,
         gele=geler,
+        **details,
     )
     return nouvel_etat
 

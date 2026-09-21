@@ -1,0 +1,42 @@
+# Pile locale de demonstration : l'API et le collecteur de traces.
+#
+#   docker compose up --build        # demarre l'ensemble
+#   http://localhost:8000            # client de depot de contrat
+#   http://localhost:8000/tableau-de-bord
+#   http://localhost:16686           # traces Jaeger
+
+services:
+  api:
+    build:
+      context: .
+      args:
+        MARDIK_VERSION: ${MARDIK_VERSION:-dev-local}
+    ports:
+      - "8000:8000"
+    environment:
+      MARDIK_FAKE_LLM: ${MARDIK_FAKE_LLM:-1}
+      AZURE_AI_ENDPOINT: ${AZURE_AI_ENDPOINT:-}
+      AZURE_AI_API_KEY: ${AZURE_AI_API_KEY:-}
+      AZURE_AI_MODEL: ${AZURE_AI_MODEL:-Kimi-K2.6}
+      MARDIK_OTEL_ACTIF: ${MARDIK_OTEL_ACTIF:-1}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      OTEL_SERVICE_NAME: mardik-contrats
+      MARDIK_CANARY_V2: ${MARDIK_CANARY_V2:-0}
+    volumes:
+      - donnees:/app/donnees
+    depends_on:
+      jaeger:
+        condition: service_started
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    ports:
+      - "16686:16686"   # interface web
+      - "4317:4317"     # OTLP/gRPC
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    restart: unless-stopped
+
+volumes:
+  donnees:
