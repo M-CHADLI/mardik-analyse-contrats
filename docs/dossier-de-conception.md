@@ -45,7 +45,102 @@ opère un modèle de langage par API, on ne l'entraîne pas.
 
 ---
 
-## 2. Contrat d'API v2
+## 2. Choix d'outils non triviaux
+
+Les outils déjà familiers de l'équipe ne sont pas justifiés ici : `pytest`, `ruff`,
+`mypy`, `uv`, Docker, GitHub Actions, OpenTelemetry/Jaeger et `structlog` sont repris de
+nos projets précédents et ne posent pas de question de conception. Restent cinq décisions
+qui méritent une justification, chacune avec l'alternative écartée et sa limite connue.
+
+### 2.1 — Une passerelle canary applicative, et non un proxy ou Kubernetes
+
+**Écarté :** répartition pondérée par Nginx/Traefik, ou Argo Rollouts sur Kubernetes.
+
+**Retenu :** un service FastAPI qui lit un poids en configuration et route chaque requête.
+
+Trois raisons décident :
+
+1. **La part de trafic v1/v2 est un des cinq signaux imposés.** Mesurée dans
+   l'application, elle est exacte et immédiate ; derrière un proxy, il faudrait analyser
+   des journaux d'accès pour la reconstituer.
+2. **Le rollback devient une écriture d'état, donc un bouton.** C'était la demande
+   explicite du brief (« le plus facile possible, genre un bouton »). Avec Argo Rollouts,
+   un retour arrière suppose un cluster, un contrôleur et une réconciliation.
+3. **Aucune bascule ne peut échapper à la trace.** Tout passe par
+   `canary.definir_poids()`, qui écrit au journal avant de rendre la main. Avec un proxy,
+   un `reload` de configuration à la main contournerait le journal — exactement le
+   « déploiement artisanal » que le brief interdit.
+
+**Limite assumée :** cette passerelle est un point de passage unique. À l'échelle, la
+répartition devrait remonter au niveau infrastructure, avec le journal alimenté par le
+contrôleur de déploiement plutôt que par l'application.
+
+### 2.2 — Un moteur de langage factice déterministe comme composant de production
+
+**Écarté :** appeler le vrai modèle en intégration continue, ou le remplacer par un mock
+de bibliothèque écrit dans les tests.
+
+**Retenu :** `MARDIK_FAKE_LLM=1`, un moteur qui repère le vocabulaire juridique de façon
+déterministe, activé par variable d'environnement.
+
+Les gates doivent être **gratuits, reproductibles et exécutables sans aucun secret** —
+sinon ils finissent désactivés sur les branches, et un gate qu'on désactive n'est plus un
+gate. Un mock de bibliothèque n'aurait pas suffi : le gate d'évaluation et
+`traffic_sim.py` s'exécutent hors des tests, en dehors de toute portée de `unittest.mock`.
+
+**Limite assumée :** les gates valident la chaîne et le contrat, pas la qualité
+linguistique du vrai modèle. Celle-ci relève d'un workflow séparé, déclenché à la main
+parce qu'il coûte de l'argent — la séparation que nous avions déjà retenue sur Velmo2.
+
+### 2.3 — Des fichiers JSONL en append, et non une base de données
+
+**Écarté :** PostgreSQL pour le journal, Prometheus pour les métriques.
+
+**Retenu :** `signaux.jsonl`, `journal.jsonl`, `golden.jsonl` en écriture seule.
+
+Le journal de pilotage est une **piste d'audit** : on y ajoute, on n'y modifie jamais.
+Un fichier ouvert en `append` traduit cette propriété directement, se lit sans outil, se
+joint à un rapport, et se rejoue à l'identique en test. Prometheus aurait apporté ses
+propres agrégations mais aurait éclaté la vérité entre deux magasins : les métriques d'un
+côté, les décisions de l'autre — alors que la question du brief est précisément de les
+relier.
+
+**Limite assumée :** aucune rotation ni rétention n'est implémentée, et les lectures sont
+en O(n). Au-delà de quelques dizaines de milliers de requêtes, il faut une base de séries
+temporelles pour les signaux — en gardant le journal de pilotage en JSONL, car son volume
+reste faible et sa valeur probante tient à son immuabilité.
+
+### 2.4 — Un score de confiance composite maison
+
+**Écarté :** les *logprobs* du modèle, ou une notation par un second modèle
+(*LLM-as-judge*).
+
+**Retenu :** `0,40 × couverture + 0,35 × complétude + 0,25 × auto-évaluation`.
+
+Les *logprobs* ne sont pas exposés par toutes les API et mesurent la confiance en la
+*génération du texte*, pas en l'*exactitude de l'extraction*. Le *LLM-as-judge* double le
+coût et la latence, et reste mal calibré. Le score composite est explicable à un juriste
+et reproductible en test — voir §3 pour le détail.
+
+### 2.5 — Une pseudonymisation par expressions régulières
+
+**Écarté :** Microsoft Presidio ou un modèle de reconnaissance d'entités nommées spaCy.
+
+**Retenu :** un jeu de motifs couvrant SIREN/SIRET, IBAN, courriels, téléphones,
+adresses, montants, raisons sociales et civilités.
+
+Presidio aurait mieux couvert les noms propres isolés, mais ajoute un modèle de plusieurs
+centaines de mégaoctets à une image qui doit démarrer vite dans la chaîne, pour une
+étape qui ne concerne qu'une poignée de documents par jour.
+
+**Limite assumée, et c'est la plus importante du dossier :** une raison sociale écrite au
+fil du texte sans forme juridique ni civilité passera au travers. C'est pourquoi la
+relecture humaine **fait aussi office de contrôle de confidentialité** (§5) — le
+dispositif ne repose pas sur la seule expression régulière.
+
+---
+
+## 3. Contrat d'API v2
 
 ### Principe structurant : sur-ensemble strict
 
@@ -132,7 +227,7 @@ trafic ».
 
 ---
 
-## 3. Schéma de la chaîne LLMOps
+## 4. Schéma de la chaîne LLMOps
 
 ```mermaid
 flowchart LR
@@ -168,7 +263,7 @@ les gates doivent être gratuits, déterministes et exécutables sans aucun secr
 
 ---
 
-## 4. Schéma de la boucle d'observabilité
+## 5. Schéma de la boucle d'observabilité
 
 ```mermaid
 flowchart TB
@@ -188,7 +283,8 @@ flowchart TB
 
     B1 --> C[État canary]
     B2 --> C
-    B3 --> V[File de validation<br/>relecture humaine]
+    B3 --> P[Pseudonymisation<br/>SIREN · IBAN · adresses<br/>raisons sociales · noms]
+    P --> V[File de validation<br/>relecture humaine<br/>exactitude + confidentialité]
     V --> GOLD[(golden.jsonl)]
     GOLD -->|rejoué à la fusion suivante| GATE[Gate d'évaluation]
 
@@ -208,13 +304,32 @@ vérité de référence graverait une erreur dans le jeu qui garde la chaîne �
 d'évaluation perdrait précisément la propriété qui le rend utile. Un juriste relit le cas
 depuis le tableau de bord avant intégration.
 
+**Et cette même étape protège les données du client.** Un cas capturé est versé dans
+`eval/golden.jsonl`, fichier **commité dans Git et rejoué par l'intégration continue** :
+sans traitement, des contrats clients réels partiraient dans un dépôt et chez un
+hébergeur tiers. Le dispositif comporte donc deux niveaux :
+
+1. **Pseudonymisation automatique à la capture** — le texte d'origine ne quitte jamais la
+   mémoire du processus. Sont remplacés par des marqueurs : SIREN/SIRET, IBAN, courriels,
+   téléphones, adresses postales, montants, raisons sociales et noms de personnes.
+   L'unité (`euros`) et le vocabulaire juridique sont conservés, si bien que la détection
+   des clauses est inchangée — c'est vérifié par un test.
+2. **La relecture humaine comme dernier contrôle** — les expressions régulières ne
+   rattrapent pas une raison sociale écrite au fil du texte (voir §2.5). Le tableau de
+   bord affiche au relecteur le décompte de ce qui a été retiré, précisément pour qu'il
+   juge de ce qui pourrait rester.
+
+Le décompte des substitutions accompagne le cas jusque dans le jeu d'évaluation et dans
+le journal de pilotage : on peut donc, a posteriori, vérifier ce qui a été anonymisé sur
+n'importe quel cas versé.
+
 **Après un rollback, la promotion est gelée** (`gele: true`). En production on arrête
 l'hémorragie d'abord, on diagnostique ensuite ; une remontée automatique juste après un
 retour arrière produirait une oscillation.
 
 ---
 
-## 5. Tableau de pilotage
+## 6. Tableau de pilotage
 
 | Signal | Seuil | Rétroaction déclenchée | Trace |
 |---|---|---|---|
@@ -236,7 +351,7 @@ réponse complète au « quel signal, quand, par qui ou par quoi » du CTO.
 
 ---
 
-## 6. Vérification
+## 7. Vérification
 
 Les dix critères de performance du brief sont transcrits en tests exécutables dans
 `tests/test_acceptance_chaine.py` et `tests/test_acceptance_observabilite.py`. Ce sont eux

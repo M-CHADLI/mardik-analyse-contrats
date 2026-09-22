@@ -59,6 +59,9 @@
     <p class="vide" style="margin-top:-6px">
       Un score bas signifie que le modèle doute, pas qu'il s'est trompé. Un cas n'entre
       dans le jeu d'évaluation qu'après relecture, pour ne pas y graver une erreur.
+      Le texte est déjà pseudonymisé automatiquement ; la colonne « Pseudonymisé » liste
+      ce qui a été retiré. <strong>Vérifiez qu'aucune donnée identifiante ne subsiste</strong> —
+      un cas versé part dans Git et dans l'intégration continue.
     </p>
     <div id="validation"></div>
   </div>
@@ -140,12 +143,16 @@ async function rafraichir() {
 
   $('validation').innerHTML = validation.cas.length ? `
     <table>
-      <thead><tr><th>Cas</th><th>Score</th><th>Taille</th><th>Début du contrat</th><th>Clauses attendues</th></tr></thead>
+      <thead><tr><th>Cas</th><th>Score</th><th>Taille</th><th>Pseudonymisé</th><th>Début du contrat</th><th>Clauses attendues</th></tr></thead>
       <tbody>${validation.cas.map(cas => `
         <tr>
           <td><code>${cas.id}</code></td>
           <td class="num"><span class="puce echec">${cas.score_observe.toFixed(2)}</span></td>
           <td class="num">${cas.taille.toLocaleString('fr-FR')}</td>
+          <td>${Object.entries(cas.anonymisation ?? {}).length
+                ? Object.entries(cas.anonymisation).map(([type, n]) =>
+                    `<span class="puce ok" title="${n} occurrence(s) retirée(s)">${type} ×${n}</span>`).join(' ')
+                : '<span class="puce attention">aucune substitution</span>'}</td>
           <td class="vide">${cas.contrat.slice(0, 110).replace(/</g, '&lt;')}…</td>
           <td>
             <select multiple size="3" id="clauses-${cas.id}" style="min-width:150px">

@@ -76,6 +76,7 @@ La conception se mène en deux chantiers. Le CTO impose les exigences suivantes 
 **Architecture / schéma attendus :**
 
 - La synthèse du besoin (fonctionnel vs contraintes, hors périmètre) en une demi-page.
+- **Explication des choix d'outils non triviaux** (hors outils déjà familiers).
 - Le contrat d'API v2 (entrées/sorties, score de confiance, codes d'erreur, versionnage).
 - Le schéma de la chaîne LLMOps : **gates bloquants → build → artefact étiqueté → déploiement canary**.
 - Le schéma de la boucle d'observabilité : **signaux → seuils → les trois rétroactions vers la chaîne**.
@@ -105,6 +106,28 @@ La conception se mène en deux chantiers. Le CTO impose les exigences suivantes 
 
 - Validation du dossier de conception (porte d'entrée du brief) : le contrat d'API, les gates et les trois boucles sont questionnés.
 - Le travail réalisé est fonctionnel et remplit le CdC.
+
+---
+
+## Propositions de questions de réflexion
+
+### Chantier 1
+
+- Que demande exactement `besoin_client.md` ? Qu'est-ce qui est **fonctionnel** (documents longs, score de confiance) et qu'est-ce qui est **contrainte** (latence, budget) ? Que mettez-vous hors périmètre de la v2 ?
+- Quel contrat d'API pour `/v2` : formats d'entrée/sortie, codes d'erreur ? D'où vient le score de confiance et que signifie-t-il pour le client ? Qu'est-ce qui a le droit de changer dans `/v1` ? (rien ?)
+- Qu'est-ce qu'une **version livrable** : code + poids du modèle + configuration ? Comment l'étiquetez-vous, et comment sait-on quelle version tourne en production à un instant donné ?
+- Quelles étapes de la chaîne, et lesquelles sont des **gates bloquants** : tests unitaires, tests d'intégration, gate d'évaluation du modèle (jeu d'éval, note minimale), build, déploiement ?
+- Sur quelle base fixez-vous les **seuils initiaux** de ces gates (note minimale, latence max), sachant qu'ils sont provisoires ? (C'est le chantier 2 qui les rendra justes.)
+- Quelle mécanique canary : quelle fraction initiale du trafic pour la v2, comment routez-vous, **où vivent les secrets** ?
+
+### Chantier 2
+
+- Quels signaux observez-vous : latence, coût par appel, taux d'erreur, distribution du score de confiance, part de trafic v1/v2 ? **Pourquoi la distribution du score plutôt que sa seule moyenne ?**
+- Comment distinguez-vous une **vraie dérive du bruit** (fenêtres glissantes, taille d'échantillon minimale, seuils avec marge) ?
+- Rollback sur signal : quel signal déclenche le retour arrière, est-il **automatique ou validé par un humain**, et comment passe-t-il par la chaîne (jamais à la main) ?
+- Promotion canary : quels critères, observés pendant combien de temps, pour passer la v2 de 10 % à 50 % puis 100 % ? Que se passe-t-il si les critères ne sont pas tenus ?
+- Enrichissement du jeu d'évaluation : comment capturez-vous les cas réels à faible confiance (**et qu'en est-il des données du client — anonymisation ?**), comment entrent-ils dans le jeu d'éval, et quand la chaîne les rejoue-t-elle ?
+- Comment ajustez-vous les seuils des gates du chantier 1 à partir des distributions observées — et comment chaque ajustement est-il tracé ?
 
 ---
 

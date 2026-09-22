@@ -61,7 +61,26 @@ est gelée, et l'événement est tracé avec le signal qui l'a déclenché. Le t
 montre la bascule en direct, et les cas à faible confiance apparaissent dans la file de
 relecture.
 
-Pour la promotion dans l'autre sens : `--profil normal --nombre 60`.
+### Démontrer la promotion
+
+La promotion exige une fenêtre de **50 requêtes servies par la v2**. Avec un canary à
+10 %, cela représente environ 500 requêtes au total — long à montrer en séance. Pour une
+démonstration, partez d'une répartition plus haute :
+
+```bash
+curl -X POST http://localhost:8000/api/canary/poids \
+     -H 'Content-Type: application/json' -d '{"poids":50,"auteur":"demo"}'
+uv run python scripts/traffic_sim.py --profil normal --nombre 110
+```
+
+La v2 passe alors au palier suivant, avec au journal le score moyen observé et la
+référence mesurée par le gate. Si les métriques ne sont pas conformes, l'événement
+`promotion_refusee` est tracé à la place : **l'absence de promotion est elle aussi une
+décision, et elle laisse une trace.**
+
+> La taille de la fenêtre est un arbitrage assumé : 50 requêtes donnent une base
+> statistique défendable pour décider d'exposer davantage de clients, au prix d'une
+> démonstration plus longue. Elle se règle dans `Seuils.FENETRE_PROMOTION`.
 
 ---
 
