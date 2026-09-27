@@ -84,6 +84,22 @@ décision, et elle laisse une trace.**
 
 ---
 
+## Déploiement
+
+`render.yaml` décrit un service web construit à partir du même `Dockerfile` que la chaîne.
+Mise en service : Render → **New → Blueprint** → sélectionner ce dépôt. L'URL publique
+obtenue sert à la fois le client et le tableau de bord.
+
+Deux limites de l'offre gratuite, assumées pour une démonstration :
+
+- le service s'endort après inactivité — premier appel autour de 50 s ;
+- **le disque n'est pas persistant** : signaux, journal de pilotage et état du canary
+  repartent à zéro à chaque redémarrage. En production ces fichiers vivent sur un volume
+  (voir le volume `donnees` de `docker-compose.yml`) ou dans un stockage objet — un
+  journal d'audit qui s'efface n'a plus de valeur probante.
+
+---
+
 ## Structure
 
 ```

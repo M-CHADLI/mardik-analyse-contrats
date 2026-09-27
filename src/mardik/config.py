@@ -82,8 +82,17 @@ class Config(BaseSettings):
 
 
 def version_livree() -> str:
-    """Etiquette de la version de **code** — injectee au build par la chaine LLMOps."""
-    return os.getenv("MARDIK_VERSION", "dev-local")
+    """Etiquette de la version de **code** — injectee au build par la chaine LLMOps.
+
+    Repli sur `RENDER_GIT_COMMIT` pour l'hebergement de demonstration, qui construit
+    l'image lui-meme et ne passe donc pas par l'argument de build : l'etiquette reste
+    ainsi rattachee au commit reellement deploye, jamais a une valeur saisie a la main.
+    """
+    if etiquette := os.getenv("MARDIK_VERSION"):
+        return etiquette
+    if commit := os.getenv("RENDER_GIT_COMMIT"):
+        return f"render-{commit[:7]}"
+    return "dev-local"
 
 
 def empreinte_config() -> str:

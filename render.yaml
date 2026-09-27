@@ -1,0 +1,44 @@
+# Déploiement de démonstration — Render (offre gratuite).
+#
+# Fournit le « client accessible via un lien » exigé par les livrables. La chaîne LLMOps
+# reste la source de vérité : Render reconstruit l'image à partir du même Dockerfile, et
+# `MARDIK_VERSION` est injecté depuis le commit déployé.
+#
+# Mise en service : Render → New → Blueprint → sélectionner ce dépôt.
+#
+# Limites connues de l'offre gratuite, assumées pour une démonstration :
+#   - le service s'endort après inactivité (premier appel ~50 s) ;
+#   - le disque n'est pas persistant : signaux, journal de pilotage et état du canary
+#     repartent à zéro à chaque redémarrage. En production, ces fichiers vivent sur un
+#     volume (voir `docker-compose.yml`, volume `donnees`) ou dans un stockage objet,
+#     car un journal d'audit qui s'efface n'a plus de valeur probante.
+
+services:
+  - type: web
+    name: mardik-contrats
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /sante
+    autoDeploy: true
+    envVars:
+      # Moteur déterministe : la démonstration fonctionne sans clé ni budget.
+      # Passer à 0 et renseigner les deux variables Azure pour brancher le vrai modèle.
+      - key: MARDIK_FAKE_LLM
+        value: "1"
+      - key: AZURE_AI_ENDPOINT
+        sync: false
+      - key: AZURE_AI_API_KEY
+        sync: false
+      # Aucun collecteur de traces n'est déployé ici : l'export OTLP est désactivé pour
+      # éviter des tentatives de connexion inutiles à chaque requête.
+      - key: MARDIK_OTEL_ACTIF
+        value: "0"
+      # La répartition démarre à 0 % : la bascule vers la v2 se pilote depuis le
+      # tableau de bord ou par la chaîne, jamais par une valeur figée au déploiement.
+      - key: MARDIK_CANARY_V2
+        value: "0"
+      # `MARDIK_VERSION` n'est pas defini ici : Render expose automatiquement
+      # `RENDER_GIT_COMMIT`, sur lequel `version_livree()` se rabat. L'etiquette reste
+      # donc rattachee au commit reellement deploye, sans valeur figee a la main.
