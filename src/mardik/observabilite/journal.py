@@ -13,7 +13,7 @@ import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 
-from mardik.config import JOURNAL_PILOTAGE, version_livree
+from mardik.config import JOURNAL_PILOTAGE, empreinte_execution, version_livree
 
 _verrou = threading.Lock()
 
@@ -33,6 +33,7 @@ class Entree:
     seuil: float | str | None
     auteur: str
     version_livree: str
+    empreinte: str
     details: dict = field(default_factory=dict)
 
 
@@ -59,6 +60,7 @@ def tracer(
         seuil=seuil,
         auteur=auteur,
         version_livree=version_livree(),
+        empreinte=empreinte_execution()["empreinte"],
         details=dict(details),
     )
 

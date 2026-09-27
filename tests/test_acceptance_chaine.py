@@ -99,6 +99,54 @@ def test_version_etiquetee_identifiable(client, contrat_long, monkeypatch):
     assert "MARDIK_VERSION" in contenu
 
 
+def test_la_version_etiquetee_couvre_code_modele_et_config(monkeypatch):
+    """« Toute fusion produit une version etiquetee (code + modele + config) ».
+
+    L'etiquette de code seule ne suffit pas : deux deploiements du meme commit avec un
+    modele ou un seuil different ne se comportent pas pareil et ne doivent donc pas
+    partager la meme identite.
+    """
+    from mardik import config as module_config
+
+    monkeypatch.setenv("MARDIK_VERSION", "main-abc1234")
+    reference = module_config.empreinte_execution()
+
+    assert set(reference) == {"code", "modele", "config", "empreinte"}
+    assert reference["code"] == "main-abc1234"
+
+    # Meme code, meme config, mais un autre modele : l'empreinte doit changer.
+    monkeypatch.setattr(module_config.config, "mardik_fake_llm", False)
+    monkeypatch.setattr(module_config.config, "azure_ai_model", "un-autre-modele")
+    autre_modele = module_config.empreinte_execution()
+    assert autre_modele["code"] == reference["code"]
+    assert autre_modele["empreinte"] != reference["empreinte"]
+
+    # Meme code, meme modele, mais un seuil deplace : l'empreinte doit changer aussi.
+    monkeypatch.setattr(module_config.config, "mardik_fake_llm", True)
+    monkeypatch.setattr(module_config.Seuils, "FAIBLE_CONFIANCE", 0.70)
+    autre_seuil = module_config.empreinte_execution()
+    assert autre_seuil["code"] == reference["code"]
+    assert autre_seuil["config"] != reference["config"]
+    assert autre_seuil["empreinte"] != reference["empreinte"]
+
+
+def test_chaque_signal_et_chaque_decision_portent_l_empreinte(client, contrat_long):
+    """Sans empreinte sur le signal, on ne peut pas attribuer un comportement observe."""
+    from mardik.observabilite import journal as module_journal
+    from mardik.observabilite import signaux as module_signaux
+
+    canary.definir_poids(
+        100, evenement=journal.DEPLOIEMENT, signal_declencheur="test", auteur="test"
+    )
+    client.post("/analyser", json={"contrat": contrat_long})
+
+    signal = module_signaux.lire(limite=1)[0]
+    assert signal["empreinte"].startswith("v-")
+
+    decision = module_journal.lire(limite=1)[0]
+    assert decision["empreinte"] == signal["empreinte"]
+
+
 def test_gate_en_echec_bloque_la_livraison(tmp_path, monkeypatch):
     """Un gate en echec (note d'evaluation sous le seuil) bloque la livraison."""
     from eval import evaluer as module_gate

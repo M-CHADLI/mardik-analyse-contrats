@@ -12,7 +12,7 @@ import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 
-from mardik.config import SIGNAUX, Seuils, version_livree
+from mardik.config import SIGNAUX, Seuils, empreinte_execution, version_livree
 
 # Tarif indicatif, aligne sur l'ordre de grandeur d'un modele de la classe utilisee.
 EUROS_PAR_1K_TOKENS = 0.0012
@@ -25,6 +25,9 @@ class Signal:
     horodatage: str
     version_modele: str
     version_livree: str
+    # Identite complete de ce qui a servi : code + modele + config. C'est elle qui rend
+    # une requete attribuable a un comportement, et non seulement a un commit.
+    empreinte: str
     latence_ms: float
     cout_eur: float
     erreur: bool
@@ -51,6 +54,7 @@ def enregistrer(
         horodatage=datetime.now(timezone.utc).isoformat(),
         version_modele=version_modele,
         version_livree=version_livree(),
+        empreinte=empreinte_execution()["empreinte"],
         latence_ms=round(latence_ms, 2),
         cout_eur=cout(tokens),
         erreur=erreur,

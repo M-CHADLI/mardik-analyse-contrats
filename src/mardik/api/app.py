@@ -24,7 +24,14 @@ from fastapi.staticfiles import StaticFiles
 
 from mardik.api import canary, schemas
 from mardik.boucles import enrichissement, promotion, rollback
-from mardik.config import CLAUSES_ATTENDUES, GOLDEN, Seuils, config, version_livree
+from mardik.config import (
+    CLAUSES_ATTENDUES,
+    GOLDEN,
+    Seuils,
+    config,
+    empreinte_execution,
+    version_livree,
+)
 from mardik.modele import v1, v2
 from mardik.modele.llm import ErreurMoteur
 from mardik.observabilite import journal, signaux, telemetrie
@@ -198,6 +205,8 @@ def sante():
         "statut": "ok",
         "version_livree": version_livree(),
         "moteur": "factice" if config.mardik_fake_llm else config.azure_ai_model,
+        # Identite complete de la version servie : code + modele + configuration.
+        "version": empreinte_execution(),
         "canary": canary.etat(),
     }
 
@@ -219,6 +228,7 @@ def api_signaux(fenetre: int = 200):
             "rollback_part_faible_confiance": Seuils.ROLLBACK_PART_FAIBLE_CONFIANCE,
         },
         "version_livree": version_livree(),
+        "version": empreinte_execution(),
     }
 
 

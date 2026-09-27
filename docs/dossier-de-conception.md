@@ -218,12 +218,42 @@ auto-déclarée par un modèle de langage est connue pour être mal calibrée.
 Toute erreur renvoie `{code, message, detail}` : un code stable et un message lisible,
 jamais une trace d'exception.
 
-### Versionnage
+### Versionnage : qu'est-ce qu'une version livrable ?
 
-`MARDIK_VERSION` est injecté **au build** sous la forme `<branche>-<sha7>`. Cet
-identifiant apparaît dans chaque réponse d'API, chaque signal et chaque entrée du journal.
-C'est ce qui rend vérifiable l'exigence « on peut identifier quelle version sert quel
-trafic ».
+Le brief exige qu'une fusion produise « une version étiquetée **(code + modèle +
+config)** ». L'étiquette de code seule ne suffirait pas : **changer de modèle ou déplacer
+un seuil modifie le comportement sans changer le commit**, et deux déploiements qui ne se
+comportent pas pareil ne peuvent pas porter la même identité.
+
+L'identité servie comporte donc trois composantes et une empreinte qui les résume :
+
+| Composante | Source | Exemple |
+|---|---|---|
+| `code` | `MARDIK_VERSION`, injecté au build (`<branche>-<sha7>`) | `main-a1b2c3d` |
+| `modele` | moteur réellement actif | `Kimi-K2.6` ou `factice` |
+| `config` | empreinte des seuils qui gouvernent une décision | `cfg-4388c5a6` |
+| **`empreinte`** | condensé des trois | **`v-ef9501fa`** |
+
+Vérification : à code et modèle constants, faire passer le seuil de fiabilité de 0,60 à
+0,70 change `config` **et** `empreinte`. C'est verrouillé par un test.
+
+**Où cette identité apparaît.** `GET /sante` en donne le détail ; chaque **signal** et
+chaque **entrée du journal de pilotage** portent l'`empreinte`. C'est ce qui permet
+d'attribuer un comportement observé à une identité précise — et non seulement à un
+commit. La réponse d'API, elle, ne porte que `version_livree` : le contrat `/v1` reste
+inchangé, conformément au périmètre.
+
+### Où vivent les secrets
+
+Aucun secret n'est stocké dans le dépôt. Ils vivent dans **GitHub Secrets** et sont
+injectés en variables d'environnement à l'exécution ; en local, dans un `.env` exclu par
+`.gitignore`, dont seul `.env.example` est versionné.
+
+Point de conception qui en découle : **les quatre gates n'ont besoin d'aucun secret**,
+puisqu'ils tournent sur le moteur factice. Seul le job de publication utilise le
+`GITHUB_TOKEN` fourni automatiquement par GitHub Actions. C'est délibéré — un gate qui
+exige un secret ne peut pas s'exécuter sur une contribution externe, finit par être
+désactivé, et un gate qu'on désactive n'est plus un gate.
 
 ---
 
@@ -297,6 +327,28 @@ flowchart TB
     style B2 fill:#0f7a52,color:#fff
     style B3 fill:#3d5afe,color:#fff
 ```
+
+**Pourquoi la distribution du score, et pas seulement sa moyenne.** Parce qu'une moyenne
+décrit une population homogène et ment dès qu'elle ne l'est pas. Ces deux situations ont
+la même moyenne de 0,75 :
+
+```
+   CAS A — population homogène          CAS B — deux populations
+   ┌───────────────────────┐            ┌───────────────────────┐
+   │            ███        │            │  ███             ███  │
+   │         ███████       │            │  ███             ███  │
+   │      ██████████       │            │  ███             ███  │
+   └───────────────────────┘            └───────────────────────┘
+    0,4    0,6    0,8   1,0              0,4    0,6    0,8   1,0
+                                          ↑
+                              la moitié du trafic est inexploitable
+```
+
+Dans le cas B, un client sur deux reçoit une analyse à revérifier et la moyenne ne le dit
+pas. C'est exactement ce que produit un flux mixte — des contrats propres et des scans
+mal reconnus. C'est d'ailleurs la raison pour laquelle la condition de rollback porte sur
+la **part d'analyses sous le seuil** (> 25 %) et non sur le score moyen : la part est une
+mesure de la queue de distribution, la moyenne l'écrase.
 
 **La boucle ③ passe par une validation humaine, délibérément.** Un score bas signifie que
 le modèle **doute**, pas qu'il **s'est trompé**. Verser automatiquement sa sortie comme
