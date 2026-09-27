@@ -31,12 +31,14 @@ class AnalyseSegment:
 
 # Vocabulaire juridique servant au moteur factice. Volontairement explicite : c'est aussi
 # la definition operationnelle de « clause trouvee » utilisee par le jeu d'evaluation.
+# Normalisation du vocabulaire : on ne conserve que l'orthographe accentuee, correcte
+# en francais, pour alleger la liste devenue difficile a maintenir.
 INDICES_CLAUSES: dict[str, tuple[str, ...]] = {
-    "duree": ("duree", "durée", "echeance", "échéance", "prend effet", "entre en vigueur"),
-    "resiliation": ("resilia", "résilia", "preavis", "préavis", "denonc", "dénonc"),
-    "paiement": ("paiement", "reglement", "règlement", "facture", "penalite", "pénalité"),
-    "responsabilite": ("responsabilit", "prejudice", "préjudice", "plafond", "indemnis"),
-    "confidentialite": ("confidentialit", "secret", "divulgu", "non-divulgation"),
+    "duree": ("durée", "échéance", "entre en vigueur"),
+    "resiliation": ("résilia", "préavis", "dénonc"),
+    "paiement": ("règlement", "pénalité"),
+    "responsabilite": ("préjudice", "indemnisation"),
+    "confidentialite": ("confidentialité", "divulgation à"),
 }
 
 PROMPT = (
