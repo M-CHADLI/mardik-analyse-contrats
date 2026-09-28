@@ -86,9 +86,31 @@ décision, et elle laisse une trace.**
 
 ## Déploiement
 
-`render.yaml` décrit un service web construit à partir du même `Dockerfile` que la chaîne.
-Mise en service : Render → **New → Blueprint** → sélectionner ce dépôt. L'URL publique
-obtenue sert à la fois le client et le tableau de bord.
+**On ne reconstruit jamais ce qui a déjà été testé.** L'hébergeur ne construit pas depuis
+le `Dockerfile` : il tire l'image que la chaîne a construite, éprouvée au démarrage et
+publiée sur GHCR. C'est ce qui rend vraie l'affirmation « l'artefact déployé est celui qui
+a franchi les gates » — deux builds du même code peuvent diverger si une dépendance
+transitive a bougé entre-temps.
+
+```
+   chaîne LLMOps                              hébergeur
+   ─────────────                              ─────────
+   gates → build → épreuve → GHCR  ──hook──▶  tire l'image :main-<sha7>
+                                                      │
+                                              la chaîne vérifie ensuite
+                                              que /sante sert bien ce tag
+```
+
+Mise en service : Render → **New → Blueprint** → sélectionner ce dépôt, puis ajouter deux
+secrets dans **Settings → Secrets and variables → Actions** du dépôt GitHub :
+
+| Secret | Où le trouver | À quoi il sert |
+|---|---|---|
+| `RENDER_DEPLOY_HOOK` | Render → le service → Settings → Deploy Hook | La chaîne fait tirer l'image exacte qu'elle vient de tester |
+| `MARDIK_HOTE` | l'URL publique du service, sans barre finale | Vérifier la version servie, puis appliquer la répartition canary |
+
+Sans ces secrets la chaîne reste verte : les étapes concernées le signalent et
+s'abstiennent. L'image étant publique sur GHCR, aucun identifiant de registre n'est requis.
 
 Deux limites de l'offre gratuite, assumées pour une démonstration :
 

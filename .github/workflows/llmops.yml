@@ -181,15 +181,64 @@ jobs:
             echo "seuil declenche un rollback automatique."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Deployer l'artefact teste
+        # On ne reconstruit pas : on demande a l'hebergeur de tirer exactement l'image qui
+        # vient de franchir les gates, designee par son tag immuable. C'est ce qui rend
+        # vraie l'affirmation « l'artefact deploye est celui qui a ete teste » — deux
+        # builds du meme code peuvent diverger si une dependance transitive a bouge.
+        env:
+          CROCHET: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          IMAGE=$(echo "${{ env.REGISTRE }}/${{ env.IMAGE }}:${{ needs.artefact.outputs.version }}" \
+            | tr '[:upper:]' '[:lower:]')
+          echo "Artefact a deployer : $IMAGE"
+          echo "- Artefact deploye : \`$IMAGE\`" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -z "$CROCHET" ]; then
+            echo "::notice::Secret RENDER_DEPLOY_HOOK absent — deploiement distant ignore."
+            exit 0
+          fi
+
+          curl -fsS --get "$CROCHET" --data-urlencode "imgURL=$IMAGE"
+          echo "Deploiement demande a l'hebergeur."
+
+      - name: Verifier la version reellement servie
+        # Un deploiement n'est acquis que lorsque l'hote repond ET sert la version
+        # attendue. Sans cette verification, une image qui ne demarre pas laisserait
+        # tourner l'ancienne sans que la chaine s'en apercoive.
+        env:
+          HOTE: ${{ secrets.MARDIK_HOTE }}
+        run: |
+          if [ -z "$HOTE" ]; then
+            echo "::notice::Secret MARDIK_HOTE absent — verification post-deploiement ignoree."
+            exit 0
+          fi
+
+          ATTENDUE="${{ needs.artefact.outputs.version }}"
+          for tentative in $(seq 1 40); do
+            SERVIE=$(curl -fsS --max-time 20 "$HOTE/sante" 2>/dev/null \
+              | grep -o '"version_livree":"[^"]*"' | cut -d'"' -f4 || true)
+            if [ "$SERVIE" = "$ATTENDUE" ]; then
+              echo "Version servie confirmee : $SERVIE"
+              echo "- Version servie verifiee : \`$SERVIE\`" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "tentative $tentative — servie : '${SERVIE:-aucune reponse}', attendue : '$ATTENDUE'"
+            sleep 15
+          done
+
+          echo "::error::L'hote ne sert toujours pas $ATTENDUE apres 10 minutes."
+          exit 1
+
       - name: Appliquer la repartition canary
-        # En l'absence d'hote distant configure, la repartition est portee par l'etat de
-        # l'application ; avec un hote, cette etape appelle POST /api/canary/poids.
+        # La v2 ne prend qu'une part minoritaire du trafic ; la montee suivante est
+        # decidee par la boucle de promotion a partir des metriques observees.
         env:
           HOTE: ${{ secrets.MARDIK_HOTE }}
         run: |
           POIDS="${{ github.event.inputs.poids_canary || '10' }}"
           if [ -z "$HOTE" ]; then
-            echo "Aucun hote distant configure (secret MARDIK_HOTE absent)."
+            echo "::notice::Secret MARDIK_HOTE absent — repartition non appliquee a distance."
             echo "Deploiement local : MARDIK_CANARY_V2=$POIDS"
             exit 0
           fi

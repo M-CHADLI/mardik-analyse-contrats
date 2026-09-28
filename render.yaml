@@ -1,10 +1,18 @@
-# Déploiement de démonstration — Render (offre gratuite).
+# Déploiement de démonstration — Render, à partir de l'image publiée par la chaîne.
 #
-# Fournit le « client accessible via un lien » exigé par les livrables. La chaîne LLMOps
-# reste la source de vérité : Render reconstruit l'image à partir du même Dockerfile, et
-# `MARDIK_VERSION` est injecté depuis le commit déployé.
+# **Pourquoi `runtime: image` et non `runtime: docker`.** En construisant lui-même à partir
+# du Dockerfile, l'hébergeur produirait un second artefact, différent de celui qui a
+# franchi les gates : deux builds du même code peuvent diverger si une dépendance
+# transitive a bougé entre-temps. On applique donc *build once, deploy anywhere* — on ne
+# reconstruit jamais ce qui a déjà été testé.
+#
+# L'image est publique sur GHCR : aucun identifiant de registre n'est nécessaire.
 #
 # Mise en service : Render → New → Blueprint → sélectionner ce dépôt.
+#
+# Chaîne de déploiement : la chaîne LLMOps appelle le « deploy hook » de Render après
+# publication, en lui passant le tag immuable `main-<sha7>` de l'image qu'elle vient de
+# tester. Render tire alors exactement cet artefact — voir `.github/workflows/llmops.yml`.
 #
 # Limites connues de l'offre gratuite, assumées pour une démonstration :
 #   - le service s'endort après inactivité (premier appel ~50 s) ;
@@ -16,12 +24,19 @@
 services:
   - type: web
     name: mardik-contrats
-    runtime: docker
+    runtime: image
     plan: free
     region: frankfurt
-    dockerfilePath: ./Dockerfile
+
+    image:
+      # Référence de repli. Chaque déploiement déclenché par la chaîne surcharge ce tag
+      # par le tag immuable `main-<sha7>` du build qui vient d'être testé ; les tags
+      # immuables restent publiés, ce qui permet d'épingler ou de revenir à une version
+      # antérieure depuis l'interface Render.
+      url: ghcr.io/m-chadli/mardik-analyse-contrats:latest
+
     healthCheckPath: /sante
-    autoDeploy: true
+
     envVars:
       # Moteur déterministe : la démonstration fonctionne sans clé ni budget.
       # Passer à 0 et renseigner les deux variables Azure pour brancher le vrai modèle.
@@ -32,13 +47,13 @@ services:
       - key: AZURE_AI_API_KEY
         sync: false
       # Aucun collecteur de traces n'est déployé ici : l'export OTLP est désactivé pour
-      # éviter des tentatives de connexion inutiles à chaque requête.
+      # éviter une tentative de connexion inutile à chaque requête.
       - key: MARDIK_OTEL_ACTIF
         value: "0"
-      # La répartition démarre à 0 % : la bascule vers la v2 se pilote depuis le
-      # tableau de bord ou par la chaîne, jamais par une valeur figée au déploiement.
+      # La répartition démarre à 0 % : la bascule vers la v2 se pilote depuis le tableau
+      # de bord ou par la chaîne, jamais par une valeur figée au déploiement.
       - key: MARDIK_CANARY_V2
         value: "0"
-      # `MARDIK_VERSION` n'est pas defini ici : Render expose automatiquement
-      # `RENDER_GIT_COMMIT`, sur lequel `version_livree()` se rabat. L'etiquette reste
-      # donc rattachee au commit reellement deploye, sans valeur figee a la main.
+      # `MARDIK_VERSION` n'est pas défini ici : il est gravé dans l'image au build par la
+      # chaîne. L'étiquette servie est donc celle de l'artefact testé, pas une valeur
+      # recalculée à l'exécution.
